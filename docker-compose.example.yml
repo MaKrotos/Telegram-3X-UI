@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres_local
+    environment:
+      POSTGRES_DB: telegramxui
+      POSTGRES_USER: fakeuser
+      POSTGRES_PASSWORD: fakepassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegramxui_app
+    depends_on:
+      - postgres
+    environment:
+      POSTGRES_DSN: "postgres://fakeuser:fakepassword@postgres:5432/telegramxui?sslmode=disable"
+      XUI_URL: "http://your-xui-server:25567/your-path/"
+      XUI_USER: "your_xui_username"
+      XUI_PASSWORD: "your_xui_password"
+      
+      # === TELEGRAM BOT НАСТРОЙКИ ===
+      
+      # Токен вашего бота (получите у @BotFather)
+      TELEGRAM_BOT_TOKEN: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+      
+      # Режим работы: "polling" или "webhook"
+      # POLLING - для разработки и тестирования (не нужен домен)
+      # WEBHOOK - для продакшена (нужен HTTPS домен)
+      TELEGRAM_BOT_MODE: "polling"
+      
+      # URL для webhook (только для webhook режима)
+      # Должен быть HTTPS и доступен из интернета
+      TELEGRAM_WEBHOOK_URL: "https://your-domain.com/webhook"
+      
+      # Порт для webhook сервера (по умолчанию 8080)
+      TELEGRAM_WEBHOOK_PORT: "8080"
+      
+    command: ["air"]
+    ports:
+      - "25566:25566"  # Основной API сервер
+      - "8080:8080"    # Webhook сервер (только для webhook режима)
+    volumes:
+      - ./:/app
+
+# === ПРИМЕРЫ КОНФИГУРАЦИИ ===
+
+# 1. РЕЖИМ POLLING (для разработки):
+# TELEGRAM_BOT_MODE: "polling"
+# TELEGRAM_WEBHOOK_URL: "" (не нужен)
+# TELEGRAM_WEBHOOK_PORT: "" (не нужен)
+
+# 2. РЕЖИМ WEBHOOK (для продакшена):
+# TELEGRAM_BOT_MODE: "webhook"
+# TELEGRAM_WEBHOOK_URL: "https://your-domain.com/webhook"
+# TELEGRAM_WEBHOOK_PORT: "8080"
+
+# === КАК ПОЛУЧИТЬ ТОКЕН БОТА ===
+# 1. Найдите @BotFather в Telegram
+# 2. Отправьте команду /newbot
+# 3. Следуйте инструкциям
+# 4. Скопируйте полученный токен в TELEGRAM_BOT_TOKEN
+
+# === НАСТРОЙКА WEBHOOK ===
+# Для webhook режима нужен:
+# 1. HTTPS домен (Telegram требует HTTPS)
+# 2. Публичный IP или домен
+# 3. Настроенный reverse proxy (nginx/traefik)
+# 4. SSL сертификат
+
+# === ПРИМЕР NGINX КОНФИГУРАЦИИ ===
+# server {
+#     listen 443 ssl;
+#     server_name your-domain.com;
+#     
+#     ssl_certificate /path/to/cert.pem;
+#     ssl_certificate_key /path/to/key.pem;
+#     
+#     location /webhook {
+#         proxy_pass http://localhost:8080;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#     }
+# } 
