@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"TelegramXUI/internal/telegram"
 	"TelegramXUI/internal/xui_client"
@@ -37,7 +39,7 @@ func getWebAppURL() string {
 	if url := os.Getenv("TELEGRAM_WEBAPP_URL"); url != "" {
 		return url
 	}
-	return "http://37.46.19.85:5173/" // значение по умолчанию
+	return "https://37.46.19.85:5173/" // значение по умолчанию (HTTPS)
 }
 
 func getDSN() string {
@@ -135,6 +137,59 @@ func getTelegramUsersHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
+// createVPNForUser создает inbound с пользователем для указанного Telegram пользователя
+func createVPNForUser(telegramUserID int64, userName string) (map[string]interface{}, error) {
+	if XUIClientInstance == nil {
+		return nil, fmt.Errorf("x-ui клиент не инициализирован")
+	}
+
+	// Логируем в x-ui
+	if err := XUIClientInstance.Login(); err != nil {
+		return nil, fmt.Errorf("ошибка входа в x-ui: %w", err)
+	}
+
+	// Используем случайный порт для inbound
+	port := 20000 + rand.Intn(40000)
+	inboundName := fmt.Sprintf("VPN для %s (ID: %d)", userName, telegramUserID)
+
+	log.Printf("[VPN] Создание inbound для пользователя %s (ID: %d) на порту %d", userName, telegramUserID, port)
+
+	emptyInbound := xui_client.GenerateEmptyInboundForm(port, inboundName)
+	inboundId, err := XUIClientInstance.AddInbound(emptyInbound)
+	if err != nil || inboundId == 0 {
+		return nil, fmt.Errorf("ошибка создания inbound: %w", err)
+	}
+
+	log.Printf("[VPN] Inbound создан успешно: id=%d, port=%d", inboundId, port)
+
+	// Создаем случайного клиента
+	clientId, email, subId, settings := xui_client.GenerateRandomClientSettings(10)
+	addClientForm := &xui_client.AddClientForm{
+		Id:       inboundId,
+		Settings: settings,
+	}
+
+	if err := XUIClientInstance.AddClientToInbound(addClientForm); err != nil {
+		return nil, fmt.Errorf("ошибка добавления клиента: %w", err)
+	}
+
+	log.Printf("[VPN] Клиент добавлен успешно: id=%d, email=%s, subId=%s", clientId, email, subId)
+
+	// Формируем данные для подключения
+	connectionData := map[string]interface{}{
+		"inbound_id":  inboundId,
+		"client_id":   clientId,
+		"email":       email,
+		"sub_id":      subId,
+		"port":        port,
+		"settings":    settings,
+		"user_name":   userName,
+		"telegram_id": telegramUserID,
+	}
+
+	return connectionData, nil
+}
+
 // handleTelegramMessage обрабатывает сообщения от Telegram
 func handleTelegramMessage(client *telegram.TelegramClient, update telegram.Update) error {
 	if update.Message.Text == "" {
@@ -168,12 +223,58 @@ func handleTelegramMessage(client *telegram.TelegramClient, update telegram.Upda
 		if err != nil {
 			log.Printf("[MessageHandler] Ошибка отправки приветственного сообщения: %v", err)
 			// Fallback на обычное сообщение
-			message := fmt.Sprintf("Привет, %s! 👋\n\nЯ бот для управления VPN через x-ui.\n\nДоступные команды:\n/status - Статус x-ui\n/help - Помощь\n/webapp - Открыть панель управления", userName)
+			message := fmt.Sprintf("Привет, %s! 👋\n\nЯ бот для управления VPN через x-ui.\n\nДоступные команды:\n/status - Статус x-ui\n/create_vpn - Создать VPN подключение\n/help - Помощь", userName)
 			log.Printf("[MessageHandler] Отправка fallback сообщения для пользователя %s (ID: %d)", userName, chatID)
 			return TelegramBotInstance.SendMessageHTML(chatID, message)
 		}
 		log.Printf("[MessageHandler] Приветственное сообщение с WebApp отправлено успешно для пользователя %s (ID: %d)", userName, chatID)
 		return nil
+
+	case text == "/create_vpn" || text == "create_vpn":
+		log.Printf("[MessageHandler] Выполняется команда /create_vpn для пользователя %s (ID: %d)", userName, chatID)
+
+		// Создаем VPN для пользователя
+		connectionData, err := createVPNForUser(int64(chatID), userName)
+		if err != nil {
+			log.Printf("[MessageHandler] Ошибка создания VPN для пользователя %s (ID: %d): %v", userName, chatID, err)
+			errorMessage := fmt.Sprintf("❌ <b>Ошибка создания VPN:</b>\n%s", err.Error())
+			return TelegramBotInstance.SendMessageHTML(chatID, errorMessage)
+		}
+
+		// Формируем сообщение с данными подключения
+		message := fmt.Sprintf(`✅ <b>VPN подключение создано!</b>
+
+👤 <b>Пользователь:</b> %s
+🆔 <b>ID:</b> %d
+📧 <b>Email:</b> %s
+🔌 <b>Порт:</b> %d
+🆔 <b>Sub ID:</b> %s
+
+<i>Данные для подключения отправлены в следующем сообщении.</i>`,
+			userName, chatID, connectionData["email"], connectionData["port"], connectionData["sub_id"])
+
+		log.Printf("[MessageHandler] VPN создан успешно для пользователя %s (ID: %d)", userName, chatID)
+
+		// Отправляем основное сообщение
+		if err := TelegramBotInstance.SendMessageHTML(chatID, message); err != nil {
+			log.Printf("[MessageHandler] Ошибка отправки основного сообщения: %v", err)
+			return err
+		}
+
+		// Отправляем данные для подключения в отдельном сообщении
+		connectionMessage := fmt.Sprintf(`🔗 <b>Данные для подключения:</b>
+
+🌐 <b>Сервер:</b> 37.46.19.85
+🔌 <b>Порт:</b> %d
+🔑 <b>UUID:</b> %s
+📧 <b>Email:</b> %s
+🆔 <b>Sub ID:</b> %s
+
+<i>Используйте эти данные для настройки VPN клиента.</i>`,
+			connectionData["port"], connectionData["settings"], connectionData["email"], connectionData["sub_id"])
+
+		log.Printf("[MessageHandler] Отправка данных подключения для пользователя %s (ID: %d)", userName, chatID)
+		return TelegramBotInstance.SendMessageHTML(chatID, connectionMessage)
 
 	case text == "/webapp" || text == "webapp":
 		log.Printf("[MessageHandler] Выполняется команда /webapp для пользователя %s (ID: %d)", userName, chatID)
@@ -192,6 +293,7 @@ func handleTelegramMessage(client *telegram.TelegramClient, update telegram.Upda
 		message := `<b>Доступные команды:</b>
 
 /start - Начать работу с ботом
+/create_vpn - Создать VPN подключение
 /webapp - Открыть панель управления VPN
 /status - Проверить статус x-ui
 /users - Статистика пользователей
@@ -248,6 +350,9 @@ func newXUIClient() *xui_client.Client {
 }
 
 func main() {
+	// Инициализация генератора случайных чисел
+	rand.Seed(time.Now().UnixNano())
+
 	dsn := getDSN()
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
