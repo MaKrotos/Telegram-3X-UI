@@ -44,10 +44,18 @@ type Chat struct {
 	Title string `json:"title"`
 }
 
+// CallbackQuery представляет callback query от inline кнопки
+type CallbackQuery struct {
+	ID   string `json:"id"`
+	From User   `json:"from"`
+	Data string `json:"data"`
+}
+
 // Update представляет обновление от Telegram
 type Update struct {
-	UpdateID int     `json:"update_id"`
-	Message  Message `json:"message"`
+	UpdateID      int            `json:"update_id"`
+	Message       *Message       `json:"message,omitempty"`
+	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
 }
 
 // GetUpdatesResponse представляет ответ на запрос обновлений
@@ -342,6 +350,7 @@ func (c *TelegramClient) SendMessageWithKeyboard(chatID int, text string, keyboa
 	request := map[string]interface{}{
 		"chat_id":      chatID,
 		"text":         text,
+		"parse_mode":   "HTML",
 		"reply_markup": keyboard,
 	}
 
@@ -351,6 +360,7 @@ func (c *TelegramClient) SendMessageWithKeyboard(chatID int, text string, keyboa
 	}
 
 	log.Printf("[TelegramAPI] Отправка сообщения с клавиатурой: chat_id=%d, text=\"%s\"", chatID, text)
+	log.Printf("[TelegramAPI] JSON запрос: %s", string(jsonData))
 
 	resp, err := c.HTTPClient.Post(
 		c.BaseURL+"/sendMessage",
@@ -429,4 +439,26 @@ func (c *TelegramClient) SendWelcomeMessageWithWebApp(chatID int, userName, webA
 Нажмите кнопку ниже, чтобы открыть панель управления:`, userName)
 
 	return c.SendMessageWithWebAppButton(chatID, message, "🚀 Открыть панель управления", webAppURL)
+}
+
+// AnswerCallbackQuery отвечает на callback query
+func (c *TelegramClient) AnswerCallbackQuery(callbackQueryID, text string) (map[string]interface{}, error) {
+	params := url.Values{}
+	params.Set("callback_query_id", callbackQueryID)
+	if text != "" {
+		params.Set("text", text)
+	}
+
+	resp, err := c.HTTPClient.PostForm(c.BaseURL+"/answerCallbackQuery", params)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка ответа на callback query: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("ошибка декодирования ответа: %w", err)
+	}
+
+	return result, nil
 }

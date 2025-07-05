@@ -137,7 +137,19 @@ func (b *TelegramBot) startPolling() error {
 				}
 
 				for _, update := range updates.Result {
-					log.Printf("[TelegramBot] Получен апдейт: update_id=%d, user_id=%d, text=\"%s\"", update.UpdateID, update.Message.From.ID, update.Message.Text)
+					var logText string
+					var userID int
+					if update.Message != nil {
+						logText = update.Message.Text
+						userID = update.Message.From.ID
+					} else if update.CallbackQuery != nil {
+						logText = "callback_query"
+						userID = update.CallbackQuery.From.ID
+					} else {
+						logText = "unknown"
+						userID = 0
+					}
+					log.Printf("[TelegramBot] Получен апдейт: update_id=%d, user_id=%d, type=\"%s\"", update.UpdateID, userID, logText)
 					b.handleUpdate(update)
 					offset = update.UpdateID + 1
 				}
@@ -223,7 +235,19 @@ func (b *TelegramBot) handleUpdate(update Update) {
 	b.mu.Unlock()
 
 	for _, handler := range handlers {
-		log.Printf("[TelegramBot] Вызов обработчика для user_id=%d, text=\"%s\"", update.Message.From.ID, update.Message.Text)
+		var logText string
+		var userID int
+		if update.Message != nil {
+			logText = update.Message.Text
+			userID = update.Message.From.ID
+		} else if update.CallbackQuery != nil {
+			logText = "callback_query: " + update.CallbackQuery.Data
+			userID = update.CallbackQuery.From.ID
+		} else {
+			logText = "unknown"
+			userID = 0
+		}
+		log.Printf("[TelegramBot] Вызов обработчика для user_id=%d, type=\"%s\"", userID, logText)
 		if err := handler(b.client, update); err != nil {
 			log.Printf("[TelegramBot] Ошибка обработчика: %v", err)
 		}
