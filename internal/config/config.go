@@ -13,6 +13,8 @@ type Config struct {
 	Telegram TelegramConfig
 	WebApp   WebAppConfig
 	VPN      VPNConfig
+	Admin    AdminConfig
+	Monitor  MonitorConfig
 }
 
 // DatabaseConfig содержит конфигурацию базы данных
@@ -47,6 +49,17 @@ type VPNConfig struct {
 	PortRangeEnd   int
 }
 
+// AdminConfig содержит конфигурацию администратора
+type AdminConfig struct {
+	GlobalAdminTgID     int64
+	GlobalAdminUsername string
+}
+
+// MonitorConfig содержит конфигурацию мониторинга хостов
+type MonitorConfig struct {
+	CheckIntervalMinutes int
+}
+
 // Load загружает конфигурацию из переменных окружения
 func Load() *Config {
 	return &Config{
@@ -71,6 +84,13 @@ func Load() *Config {
 			ServerIP:       getEnvOrDefault("VPN_SERVER_IP", ""),
 			PortRangeStart: getEnvAsInt("VPN_SERVER_PORT_RANGE_START", 20000),
 			PortRangeEnd:   getEnvAsInt("VPN_SERVER_PORT_RANGE_END", 60000),
+		},
+		Admin: AdminConfig{
+			GlobalAdminTgID:     getEnvAsInt64("GLOBAL_ADMIN_TG_ID", 0),
+			GlobalAdminUsername: getEnvOrDefault("GLOBAL_ADMIN_USERNAME", ""),
+		},
+		Monitor: MonitorConfig{
+			CheckIntervalMinutes: getEnvAsInt("HOST_MONITOR_INTERVAL_MINUTES", 5),
 		},
 	}
 }
@@ -112,6 +132,16 @@ func getEnvOrDefault(key, defaultValue string) string {
 func getEnvAsInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+	}
+	return defaultValue
+}
+
+// getEnvAsInt64 получает значение переменной окружения как int64 или возвращает значение по умолчанию
+func getEnvAsInt64(key string, defaultValue int64) int64 {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.ParseInt(value, 10, 64); err == nil {
 			return intValue
 		}
 	}

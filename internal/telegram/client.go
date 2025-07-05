@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"TelegramXUI/internal/contracts"
 )
 
 // TelegramClient представляет клиент для работы с Telegram Bot API
@@ -21,21 +23,15 @@ type TelegramClient struct {
 
 // Message представляет сообщение Telegram
 type Message struct {
-	MessageID int    `json:"message_id"`
-	From      User   `json:"from"`
-	Chat      Chat   `json:"chat"`
-	Date      int    `json:"date"`
-	Text      string `json:"text"`
+	MessageID int            `json:"message_id"`
+	From      contracts.User `json:"from"`
+	Chat      Chat           `json:"chat"`
+	Date      int            `json:"date"`
+	Text      string         `json:"text"`
 }
 
 // User представляет пользователя Telegram
-type User struct {
-	ID        int    `json:"id"`
-	IsBot     bool   `json:"is_bot"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
-	Username  string `json:"username"`
-}
+type User = contracts.User
 
 // Chat представляет чат Telegram
 type Chat struct {

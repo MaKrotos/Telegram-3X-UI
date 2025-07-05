@@ -5,9 +5,13 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"TelegramXUI/internal/config"
+	"TelegramXUI/internal/contracts"
 	"TelegramXUI/internal/handlers"
 	"TelegramXUI/internal/services"
 	"TelegramXUI/internal/telegram"
@@ -57,6 +61,20 @@ func main() {
 	userService := services.NewUserService(db)
 	log.Println("Сервис пользователей инициализирован")
 
+	// Инициализируем сервисы состояний и администратора
+	userStateService := services.NewUserStateService(db)
+	extensibleStateService := services.NewExtensibleStateService(db)
+	xuiServerService := services.NewXUIServerService(db)
+	adminService := services.NewAdminService(cfg)
+
+	// Создаем сервис для добавления XUI хостов
+	xuiHostAddService := services.NewXUIHostAddService(
+		userStateService,
+		extensibleStateService,
+		xuiServerService,
+		adminService,
+	)
+
 	// Инициализируем x-ui клиент
 	xuiClient := xui_client.NewClient(cfg.XUI.URL, cfg.XUI.Username, cfg.XUI.Password)
 	vpnService := services.NewVPNService(xuiClient)
@@ -69,6 +87,10 @@ func main() {
 
 	// Инициализируем HTTP обработчики
 	httpHandler := handlers.NewHTTPHandler(userService, vpnService, cfg.WebApp.URL)
+
+	// Переменные для graceful shutdown
+	var bot *telegram.TelegramBot
+	var hostMonitorService *services.HostMonitorService
 
 	// Инициализируем Telegram бота
 	if cfg.Telegram.Token != "" && cfg.Telegram.Token != "your_bot_token_here" {
@@ -86,16 +108,45 @@ func main() {
 		}
 
 		// Создаем бота
-		bot, err := telegram.NewBot(botConfig)
+		bot, err = telegram.NewBot(botConfig)
 		if err != nil {
 			log.Fatalf("Ошибка создания Telegram бота: %v", err)
 		}
 
-		// Создаем обработчик Telegram сообщений
-		telegramHandler := handlers.NewTelegramHandler(vpnService, userService, bot, cfg.WebApp.URL, &cfg.VPN)
+		// Создаем адаптеры для совместимости типов
+		userStateAdapter := &UserStateServiceAdapter{userStateService}
+		xuiHostAddAdapter := &XUIHostAddServiceAdapter{xuiHostAddService}
+
+		// Создаем адаптер для TelegramClient
+		telegramClientAdapter := &TelegramClientAdapter{bot}
+
+		// Создаем сервис мониторинга хостов
+		hostMonitorService = services.NewHostMonitorService(
+			xuiServerService,
+			adminService,
+			telegramClientAdapter,
+			time.Duration(cfg.Monitor.CheckIntervalMinutes)*time.Minute,
+		)
+
+		// Создаем новый обработчик сообщений с поддержкой добавления XUI хостов и мониторинга
+		messageProcessor := telegram.NewMessageProcessor(
+			userStateAdapter,
+			extensibleStateService,
+			xuiHostAddAdapter,
+			adminService,
+			xuiServerService,
+			hostMonitorService,
+		)
 
 		// Добавляем обработчик сообщений
-		bot.AddHandler(telegramHandler.HandleMessage)
+		bot.AddHandler(messageProcessor.ProcessMessage)
+
+		// Запускаем мониторинг хостов
+		if err := hostMonitorService.Start(); err != nil {
+			log.Printf("Предупреждение: не удалось запустить мониторинг хостов: %v", err)
+		} else {
+			log.Printf("Мониторинг хостов запущен с интервалом %d минут", cfg.Monitor.CheckIntervalMinutes)
+		}
 
 		// Запускаем бота
 		if err := bot.Start(); err != nil {
@@ -115,5 +166,121 @@ func main() {
 	http.HandleFunc("/v1/telegram/users", httpHandler.GetTelegramUsersHandler())
 
 	log.Println("Сервер запущен на :25566")
-	log.Fatal(http.ListenAndServe(":25566", nil))
+
+	// Создаем канал для обработки сигналов
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	// Запускаем сервер в отдельной горутине
+	go func() {
+		if err := http.ListenAndServe(":25566", nil); err != nil {
+			log.Fatalf("Ошибка запуска сервера: %v", err)
+		}
+	}()
+
+	// Ожидаем сигнала для завершения
+	<-signalChan
+
+	log.Println("Сервер завершает работу")
+
+	// Graceful shutdown
+	if hostMonitorService != nil {
+		log.Println("Останавливаем мониторинг хостов...")
+		if err := hostMonitorService.Stop(); err != nil {
+			log.Printf("Ошибка остановки мониторинга: %v", err)
+		}
+	}
+
+	if bot != nil {
+		log.Println("Останавливаем Telegram бота...")
+		if err := bot.Stop(); err != nil {
+			log.Printf("Ошибка остановки бота: %v", err)
+		}
+	}
+
+	log.Println("Сервер успешно завершил работу")
+}
+
+// UserStateServiceAdapter адаптирует services.UserStateService к contracts.UserStateService
+type UserStateServiceAdapter struct {
+	service *services.UserStateService
+}
+
+func (a *UserStateServiceAdapter) GetUserState(telegramID int64) (*contracts.UserStateInfo, error) {
+	user, err := a.service.GetUserState(telegramID)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, nil
+	}
+
+	// Преобразуем services.UserStateInfo в contracts.UserStateInfo
+	return &contracts.UserStateInfo{
+		ID:                     user.ID,
+		TelegramID:             user.TelegramID,
+		Username:               user.Username,
+		FirstName:              user.FirstName,
+		LastName:               user.LastName,
+		State:                  string(user.State),
+		ExpectedAction:         string(user.ExpectedAction),
+		StateChangedAt:         user.StateChangedAt,
+		StateReason:            user.StateReason,
+		StateChangedByTgID:     user.StateChangedByTgID,
+		StateChangedByUsername: user.StateChangedByUsername,
+		StateExpiresAt:         user.StateExpiresAt,
+		StateMetadata:          user.StateMetadata,
+		CreatedAt:              user.CreatedAt,
+		UpdatedAt:              user.UpdatedAt,
+		LastActivity:           user.LastActivity,
+	}, nil
+}
+
+func (a *UserStateServiceAdapter) CanUserPerformAction(telegramID int64) (bool, string, error) {
+	return a.service.CanUserPerformAction(telegramID)
+}
+
+// XUIHostAddServiceAdapter адаптирует services.XUIHostAddService к contracts.XUIHostAddService
+type XUIHostAddServiceAdapter struct {
+	service *services.XUIHostAddService
+}
+
+func (a *XUIHostAddServiceAdapter) StartAddHostProcess(telegramID int64, username string) error {
+	return a.service.StartAddHostProcess(telegramID, username)
+}
+
+func (a *XUIHostAddServiceAdapter) ProcessHostData(telegramID int64, message string, username string) (*contracts.XUIHostData, error) {
+	hostData, err := a.service.ProcessHostData(telegramID, message, username)
+	if err != nil {
+		return nil, err
+	}
+
+	// Преобразуем services.XUIHostData в contracts.XUIHostData
+	return &contracts.XUIHostData{
+		Host:      hostData.Host,
+		Login:     hostData.Login,
+		Password:  hostData.Password,
+		SecretKey: hostData.SecretKey,
+	}, nil
+}
+
+func (a *XUIHostAddServiceAdapter) CancelAddHostProcess(telegramID int64, username string) error {
+	return a.service.CancelAddHostProcess(telegramID, username)
+}
+
+func (a *XUIHostAddServiceAdapter) GetAddHostInstructions() string {
+	return a.service.GetAddHostInstructions()
+}
+
+func (a *XUIHostAddServiceAdapter) IsInAddHostState(telegramID int64) (bool, error) {
+	return a.service.IsInAddHostState(telegramID)
+}
+
+// TelegramClientAdapter адаптирует telegram.TelegramBot к интерфейсу contracts.TelegramMessageSender
+type TelegramClientAdapter struct {
+	bot *telegram.TelegramBot
+}
+
+func (a *TelegramClientAdapter) SendMessage(chatID int64, message string) error {
+	return a.bot.SendMessage(int(chatID), message)
 }

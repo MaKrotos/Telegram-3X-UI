@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"TelegramXUI/internal/telegram"
+	"TelegramXUI/internal/contracts"
 )
 
 // UserService предоставляет методы для работы с пользователями
@@ -21,7 +21,7 @@ func NewUserService(db *sql.DB) *UserService {
 }
 
 // EnsureUserExists проверяет существование пользователя и создает его при необходимости
-func (s *UserService) EnsureUserExists(user telegram.User) (*telegram.TelegramUser, error) {
+func (s *UserService) EnsureUserExists(user contracts.User) (*contracts.TelegramUser, error) {
 	// Проверяем, существует ли пользователь
 	existingUser, err := s.GetUserByTelegramID(int64(user.ID))
 	if err != nil && err != sql.ErrNoRows {
@@ -33,7 +33,7 @@ func (s *UserService) EnsureUserExists(user telegram.User) (*telegram.TelegramUs
 	}
 
 	// Создаем нового пользователя
-	newUser := &telegram.TelegramUser{
+	newUser := &contracts.TelegramUser{
 		TelegramID: int64(user.ID),
 		FirstName:  user.FirstName,
 		LastName:   user.LastName,
@@ -50,11 +50,11 @@ func (s *UserService) EnsureUserExists(user telegram.User) (*telegram.TelegramUs
 }
 
 // GetUserByTelegramID получает пользователя по Telegram ID
-func (s *UserService) GetUserByTelegramID(telegramID int64) (*telegram.TelegramUser, error) {
+func (s *UserService) GetUserByTelegramID(telegramID int64) (*contracts.TelegramUser, error) {
 	query := `SELECT id, telegram_id, first_name, last_name, username, is_bot, created_at, updated_at 
 			  FROM telegram_users WHERE telegram_id = $1`
 
-	var user telegram.TelegramUser
+	var user contracts.TelegramUser
 	err := s.db.QueryRow(query, telegramID).Scan(
 		&user.ID,
 		&user.TelegramID,
@@ -74,7 +74,7 @@ func (s *UserService) GetUserByTelegramID(telegramID int64) (*telegram.TelegramU
 }
 
 // CreateUser создает нового пользователя
-func (s *UserService) CreateUser(user *telegram.TelegramUser) error {
+func (s *UserService) CreateUser(user *contracts.TelegramUser) error {
 	query := `INSERT INTO telegram_users (telegram_id, first_name, last_name, username, is_bot) 
 			  VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at, updated_at`
 
@@ -86,7 +86,7 @@ func (s *UserService) CreateUser(user *telegram.TelegramUser) error {
 }
 
 // GetAllUsers получает всех пользователей
-func (s *UserService) GetAllUsers() ([]telegram.TelegramUser, error) {
+func (s *UserService) GetAllUsers() ([]contracts.TelegramUser, error) {
 	query := `SELECT id, telegram_id, first_name, last_name, username, is_bot, created_at, updated_at 
 			  FROM telegram_users ORDER BY created_at DESC`
 
@@ -96,9 +96,9 @@ func (s *UserService) GetAllUsers() ([]telegram.TelegramUser, error) {
 	}
 	defer rows.Close()
 
-	var users []telegram.TelegramUser
+	var users []contracts.TelegramUser
 	for rows.Next() {
-		var user telegram.TelegramUser
+		var user contracts.TelegramUser
 		err := rows.Scan(
 			&user.ID,
 			&user.TelegramID,
