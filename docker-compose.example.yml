@@ -1,0 +1,168 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres_local
+    environment:
+      POSTGRES_DB: telegramxui
+      POSTGRES_USER: fakeuser
+      POSTGRES_PASSWORD: fakepassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegramxui_app
+    depends_on:
+      - postgres
+    environment:
+      POSTGRES_DSN: "postgres://fakeuser:fakepassword@postgres:5432/telegramxui?sslmode=disable"
+      
+      # === TELEGRAM BOT НАСТРОЙКИ ===
+      
+      # Токен вашего бота (получите у @BotFather)
+      TELEGRAM_BOT_TOKEN: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+      
+      # Режим работы: "polling" или "webhook"
+      # POLLING - для разработки и тестирования (не нужен домен)
+      # WEBHOOK - для продакшена (нужен HTTPS домен)
+      TELEGRAM_BOT_MODE: "polling"
+      
+      # URL для webhook (только для webhook режима)
+      # Должен быть HTTPS и доступен из интернета
+      TELEGRAM_WEBHOOK_URL: "https://your-domain.com/webhook"
+      
+      # Порт для webhook сервера (по умолчанию 8080)
+      TELEGRAM_WEBHOOK_PORT: "8080"
+      
+      # URL для WebApp (опционально)
+      TELEGRAM_WEBAPP_URL: "https://your-webapp-domain.com/"
+      
+      # === ГЛОБАЛЬНЫЙ АДМИНИСТРАТОР ===
+      
+      # Telegram ID глобального администратора (обязательно)
+      # Получите ваш ID, отправив /start боту @userinfobot
+      GLOBAL_ADMIN_TG_ID: "123456789"
+      
+      # Username глобального администратора (обязательно)
+      # Без символа @ (например: "admin" вместо "@admin")
+      GLOBAL_ADMIN_USERNAME: "your_admin_username"
+      
+      # === VPN НАСТРОЙКИ ===
+      
+      # IP адрес VPN сервера (для генерации VLESS ссылок)
+      VPN_SERVER_IP: "your.vpn.server.com"
+      
+      # Диапазон портов для VPN подключений
+      VPN_SERVER_PORT_RANGE_START: "20000"
+      VPN_SERVER_PORT_RANGE_END: "60000"
+      
+      # === МОНИТОРИНГ ХОСТОВ ===
+      
+      # Интервал проверки хостов в минутах (по умолчанию 5)
+      # Система будет автоматически проверять доступность всех XUI хостов
+      HOST_MONITOR_INTERVAL_MINUTES: "5"
+      
+    command: ["air"]
+    ports:
+      - "25566:25566"  # Основной API сервер
+      - "8080:8080"    # Webhook сервер (только для webhook режима)
+    volumes:
+      - ./:/app
+
+# === ПРИМЕРЫ КОНФИГУРАЦИИ ===
+
+# 1. РЕЖИМ POLLING (для разработки):
+# TELEGRAM_BOT_MODE: "polling"
+# TELEGRAM_WEBHOOK_URL: "" (не нужен)
+# TELEGRAM_WEBHOOK_PORT: "" (не нужен)
+
+# 2. РЕЖИМ WEBHOOK (для продакшена):
+# TELEGRAM_BOT_MODE: "webhook"
+# TELEGRAM_WEBHOOK_URL: "https://your-domain.com/webhook"
+# TELEGRAM_WEBHOOK_PORT: "8080"
+
+# === КАК ПОЛУЧИТЬ ТОКЕН БОТА ===
+# 1. Найдите @BotFather в Telegram
+# 2. Отправьте команду /newbot
+# 3. Следуйте инструкциям
+# 4. Скопируйте полученный токен в TELEGRAM_BOT_TOKEN
+
+# === КАК ПОЛУЧИТЬ ВАШ TELEGRAM ID ===
+# 1. Найдите @userinfobot в Telegram
+# 2. Отправьте команду /start
+# 3. Бот покажет ваш ID
+# 4. Скопируйте ID в GLOBAL_ADMIN_TG_ID
+
+# === ПРАВА ГЛОБАЛЬНОГО АДМИНИСТРАТОРА ===
+# Глобальный администратор имеет следующие права:
+# ✅ Просмотр всех серверов в системе
+# ✅ Управление всеми серверами (добавление, редактирование, удаление)
+# ✅ Просмотр статистики по всем серверам
+# ✅ Управление пользователями
+# ✅ Доступ к административным функциям
+# ✅ Просмотр серверов по датам
+# ✅ Полная статистика системы
+
+# === БЕЗОПАСНОСТЬ ===
+# ⚠️ ВАЖНО: Глобальный администратор имеет полный доступ к системе!
+# - Храните GLOBAL_ADMIN_TG_ID и GLOBAL_ADMIN_USERNAME в безопасном месте
+# - Не передавайте эти данные третьим лицам
+# - Регулярно проверяйте логи на подозрительную активность
+# - Используйте сильные пароли для всех сервисов
+
+# === НАСТРОЙКА WEBHOOK ===
+# Для webhook режима нужен:
+# 1. HTTPS домен (Telegram требует HTTPS)
+# 2. Публичный IP или домен
+# 3. Настроенный reverse proxy (nginx/traefik)
+# 4. SSL сертификат
+
+# === ПРИМЕР NGINX КОНФИГУРАЦИИ ===
+# server {
+#     listen 443 ssl;
+#     server_name your-domain.com;
+#     
+#     ssl_certificate /path/to/cert.pem;
+#     ssl_certificate_key /path/to/key.pem;
+#     
+#     location /webhook {
+#         proxy_pass http://localhost:8080;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#     }
+# }
+
+# === МОНИТОРИНГ ХОСТОВ ===
+# Система автоматически мониторит все добавленные XUI хосты:
+# 
+# ✅ Автоматические проверки каждые N минут
+# ✅ Проверка авторизации и API доступности
+# ✅ Уведомления администраторов о проблемах
+# ✅ Автоматическое отключение неактивных хостов
+# 
+# Команды управления мониторингом:
+# /monitor - общая информация о мониторинге
+# /monitor_start - запустить мониторинг
+# /monitor_stop - остановить мониторинг
+# /monitor_status - детальная статистика
+# /check_hosts - немедленная проверка всех хостов
+# 
+# Подробная документация: HOST_MONITORING.md
+
+# === ДОБАВЛЕНИЕ XUI ХОСТОВ ===
+# После запуска системы администраторы могут добавлять XUI хосты через бота:
+# 
+# 1. Отправьте команду /addhost
+# 2. Введите данные в формате: хост логин пароль [секретный_ключ]
+# 3. Система автоматически проверит подключение
+# 4. Хост будет добавлен в базу данных
+# 
+# Пример: https://xui.example.com admin password123
+# 
+# Подробная документация: TELEGRAM_XUI_HOST_ADD_README.md 

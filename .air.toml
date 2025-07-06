@@ -1,0 +1,17 @@
+[build]
+  cmd = "go build -o telegramxui ./cmd/telegramxui"
+  bin = "telegramxui"
+  full_bin = "./telegramxui"
+  include_ext = ["go", "tpl", "tmpl", "sql"]
+  exclude_dir = ["vendor", "pg_data"]
+  exclude_file = []
+  follow_symlink = true
+
+[log]
+  time = true
+
+[color]
+  main = "yellow"
+  watcher = "cyan"
+  build = "green"
+  runner = "magenta" 
