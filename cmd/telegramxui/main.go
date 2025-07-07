@@ -15,7 +15,6 @@ import (
 	"TelegramXUI/internal/handlers"
 	"TelegramXUI/internal/services"
 	"TelegramXUI/internal/telegram"
-	"TelegramXUI/internal/xui_client"
 
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
@@ -31,15 +30,6 @@ func main() {
 	// Проверяем обязательные переменные окружения
 	if cfg.Telegram.Token == "" {
 		log.Fatal("TELEGRAM_BOT_TOKEN не задан в переменных окружения")
-	}
-	if cfg.XUI.URL == "" {
-		log.Fatal("XUI_URL не задан в переменных окружения")
-	}
-	if cfg.XUI.Username == "" {
-		log.Fatal("XUI_USER не задан в переменных окружения")
-	}
-	if cfg.XUI.Password == "" {
-		log.Fatal("XUI_PASSWORD не задан в переменных окружения")
 	}
 	if cfg.VPN.ServerIP == "" {
 		log.Fatal("VPN_SERVER_IP не задан в переменных окружения")
@@ -67,6 +57,8 @@ func main() {
 	xuiServerService := services.NewXUIServerService(db)
 	adminService := services.NewAdminService(cfg)
 
+	vpnConnectionService := services.NewVPNConnectionService(db)
+
 	// Создаем сервис для добавления XUI хостов
 	xuiHostAddService := services.NewXUIHostAddService(
 		userStateService,
@@ -75,21 +67,8 @@ func main() {
 		adminService,
 	)
 
-	// Инициализируем x-ui клиент
-	xuiClient := xui_client.NewClient(cfg.XUI.URL, cfg.XUI.Username, cfg.XUI.Password)
-
-	// Инициализируем VPN сервисы
-	vpnConnectionService := services.NewVPNConnectionService(db)
-	vpnService := services.NewVPNService(xuiClient, vpnConnectionService)
-
-	if err := vpnService.CheckStatus(); err != nil {
-		log.Printf("Предупреждение: не удалось подключиться к x-ui: %v", err)
-	} else {
-		log.Println("Успешное подключение к x-ui")
-	}
-
 	// Инициализируем HTTP обработчики
-	httpHandler := handlers.NewHTTPHandler(userService, vpnService, cfg.WebApp.URL)
+	httpHandler := handlers.NewHTTPHandler(userService, nil, cfg.WebApp.URL)
 
 	// Переменные для graceful shutdown
 	var bot *telegram.TelegramBot

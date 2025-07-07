@@ -24,9 +24,7 @@ type DatabaseConfig struct {
 
 // XUIConfig содержит конфигурацию x-ui
 type XUIConfig struct {
-	URL      string
-	Username string
-	Password string
+	URL string
 }
 
 // TelegramConfig содержит конфигурацию Telegram бота
@@ -65,11 +63,6 @@ func Load() *Config {
 	return &Config{
 		Database: DatabaseConfig{
 			DSN: getDSN(),
-		},
-		XUI: XUIConfig{
-			URL:      getEnvOrDefault("XUI_URL", ""),
-			Username: getEnvOrDefault("XUI_USER", ""),
-			Password: getEnvOrDefault("XUI_PASSWORD", ""),
 		},
 		Telegram: TelegramConfig{
 			Token:       getEnvOrDefault("TELEGRAM_BOT_TOKEN", ""),

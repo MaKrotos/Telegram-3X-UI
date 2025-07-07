@@ -392,6 +392,12 @@ func (p *MessageProcessor) sendMessageWithAdminButtons(client *TelegramClient, c
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{
 				{
+					Text:         "🔑 Создать VPN",
+					CallbackData: "create_vpn",
+				},
+			},
+			{
+				{
 					Text:         "➕ Добавить XUI хост",
 					CallbackData: "addhost",
 				},
