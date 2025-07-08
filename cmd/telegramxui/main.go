@@ -113,6 +113,9 @@ func main() {
 		// Создаем Telegram UserService
 		telegramUserService := telegram.NewUserService(db)
 
+		// Создаем сервис транзакций
+		transactionService := services.NewTransactionService(db)
+
 		// Создаем новый обработчик сообщений с поддержкой добавления XUI хостов и мониторинга
 		messageProcessor := telegram.NewMessageProcessor(
 			userStateAdapter,
@@ -124,6 +127,7 @@ func main() {
 			telegramUserService,
 			vpnConnectionService,
 			cfg,
+			transactionService,
 		)
 
 		// Добавляем обработчик сообщений

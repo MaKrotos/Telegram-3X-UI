@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -136,6 +137,16 @@ func (b *TelegramBot) startPolling() error {
 					continue
 				}
 
+				// Логируем весь JSON-ответ
+				if updates != nil {
+					jsonData, err := json.MarshalIndent(updates, "", "  ")
+					if err != nil {
+						log.Printf("[TelegramBot] Ошибка маршалинга updates: %v", err)
+					} else {
+						log.Printf("[TelegramBot] RAW UPDATES JSON: %s", string(jsonData))
+					}
+				}
+
 				for _, update := range updates.Result {
 					var logText string
 					var userID int
@@ -145,6 +156,9 @@ func (b *TelegramBot) startPolling() error {
 					} else if update.CallbackQuery != nil {
 						logText = "callback_query"
 						userID = update.CallbackQuery.From.ID
+					} else if update.PreCheckoutQuery != nil {
+						logText = "pre_checkout_query"
+						userID = update.PreCheckoutQuery.From.ID
 					} else {
 						logText = "unknown"
 						userID = 0
@@ -243,6 +257,9 @@ func (b *TelegramBot) handleUpdate(update Update) {
 		} else if update.CallbackQuery != nil {
 			logText = "callback_query: " + update.CallbackQuery.Data
 			userID = update.CallbackQuery.From.ID
+		} else if update.PreCheckoutQuery != nil {
+			logText = "pre_checkout_query"
+			userID = update.PreCheckoutQuery.From.ID
 		} else {
 			logText = "unknown"
 			userID = 0

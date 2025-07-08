@@ -23,11 +23,12 @@ type TelegramClient struct {
 
 // Message представляет сообщение Telegram
 type Message struct {
-	MessageID int            `json:"message_id"`
-	From      contracts.User `json:"from"`
-	Chat      Chat           `json:"chat"`
-	Date      int            `json:"date"`
-	Text      string         `json:"text"`
+	MessageID         int                `json:"message_id"`
+	From              contracts.User     `json:"from"`
+	Chat              Chat               `json:"chat"`
+	Date              int                `json:"date"`
+	Text              string             `json:"text"`
+	SuccessfulPayment *SuccessfulPayment `json:"successful_payment,omitempty"`
 }
 
 // User представляет пользователя Telegram
@@ -47,11 +48,21 @@ type CallbackQuery struct {
 	Data string `json:"data"`
 }
 
+// PreCheckoutQuery представляет pre_checkout_query для поддержки Telegram Payments/Stars
+type PreCheckoutQuery struct {
+	ID             string         `json:"id"`
+	From           contracts.User `json:"from"`
+	Currency       string         `json:"currency"`
+	TotalAmount    int            `json:"total_amount"`
+	InvoicePayload string         `json:"invoice_payload"`
+}
+
 // Update представляет обновление от Telegram
 type Update struct {
-	UpdateID      int            `json:"update_id"`
-	Message       *Message       `json:"message,omitempty"`
-	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+	UpdateID         int               `json:"update_id"`
+	Message          *Message          `json:"message,omitempty"`
+	CallbackQuery    *CallbackQuery    `json:"callback_query,omitempty"`
+	PreCheckoutQuery *PreCheckoutQuery `json:"pre_checkout_query,omitempty"`
 }
 
 // GetUpdatesResponse представляет ответ на запрос обновлений
@@ -90,6 +101,15 @@ type WebApp struct {
 // InlineKeyboardMarkup представляет inline клавиатуру
 type InlineKeyboardMarkup struct {
 	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
+}
+
+// SuccessfulPayment представляет информацию о успешной оплате через Telegram Payments/Stars
+type SuccessfulPayment struct {
+	Currency                string `json:"currency"`
+	TotalAmount             int    `json:"total_amount"`
+	InvoicePayload          string `json:"invoice_payload"`
+	TelegramPaymentChargeID string `json:"telegram_payment_charge_id"`
+	ProviderPaymentChargeID string `json:"provider_payment_charge_id"`
 }
 
 // NewClient создает новый экземпляр TelegramClient
@@ -457,4 +477,137 @@ func (c *TelegramClient) AnswerCallbackQuery(callbackQueryID, text string) (map[
 	}
 
 	return result, nil
+}
+
+// SendInvoice отправляет инвойс пользователю через Telegram Payments/Stars
+func (c *TelegramClient) SendInvoice(chatID int, title, description, payload, providerToken, currency string, prices []LabeledPrice, isTest bool) error {
+	invoice := map[string]interface{}{
+		"chat_id":     chatID,
+		"title":       title,
+		"description": description,
+		"payload":     payload,
+		"currency":    currency,
+		"prices":      prices,
+	}
+	if currency != "XTR" {
+		invoice["provider_token"] = providerToken
+		if isTest {
+			invoice["provider_token"] = "TEST:TOKEN"
+		}
+	}
+	jsonData, err := json.Marshal(invoice)
+	if err != nil {
+		return fmt.Errorf("ошибка маршалинга инвойса: %w", err)
+	}
+	resp, err := c.HTTPClient.Post(
+		c.BaseURL+"/sendInvoice",
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return fmt.Errorf("ошибка отправки инвойса: %w", err)
+	}
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+	log.Printf("[TelegramAPI] Ответ на sendInvoice: %s", string(bodyBytes))
+	var result map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		return fmt.Errorf("ошибка декодирования ответа: %w", err)
+	}
+	if ok, exists := result["ok"].(bool); !exists || !ok {
+		return fmt.Errorf("ошибка Telegram API: %v", result["description"])
+	}
+	return nil
+}
+
+// LabeledPrice описывает цену для инвойса
+// https://core.telegram.org/bots/api#labeledprice
+type LabeledPrice struct {
+	Label  string `json:"label"`
+	Amount int    `json:"amount"`
+}
+
+// AnswerPreCheckoutQuery отвечает на pre_checkout_query
+func (c *TelegramClient) AnswerPreCheckoutQuery(preCheckoutQueryID string, ok bool, errorMessage string) error {
+	data := map[string]interface{}{
+		"pre_checkout_query_id": preCheckoutQueryID,
+		"ok":                    ok,
+	}
+	if !ok && errorMessage != "" {
+		data["error_message"] = errorMessage
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("ошибка маршалинга запроса: %w", err)
+	}
+	log.Printf("[DEBUG] Отправка answerPreCheckoutQuery: %s", string(jsonData))
+	resp, err := c.HTTPClient.Post(
+		c.BaseURL+"/answerPreCheckoutQuery",
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		log.Printf("[ERROR] Ошибка отправки запроса answerPreCheckoutQuery: %v", err)
+		return fmt.Errorf("ошибка отправки запроса: %w", err)
+	}
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Ошибка чтения ответа answerPreCheckoutQuery: %v", err)
+		return fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+	log.Printf("[TelegramAPI] Ответ на answerPreCheckoutQuery: %s", string(bodyBytes))
+	var result map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		log.Printf("[ERROR] Ошибка декодирования ответа answerPreCheckoutQuery: %v", err)
+		return fmt.Errorf("ошибка декодирования ответа: %w", err)
+	}
+	if ok, exists := result["ok"].(bool); !exists || !ok {
+		log.Printf("[ERROR] Ошибка Telegram API в answerPreCheckoutQuery: %v", result["description"])
+		return fmt.Errorf("ошибка Telegram API: %v", result["description"])
+	}
+	return nil
+}
+
+// RefundStarPayment осуществляет возврат звёзд пользователю по payment_charge_id
+func (c *TelegramClient) RefundStarPayment(userID int64, telegramPaymentChargeID string, amount int, reason string) error {
+	data := map[string]interface{}{
+		"user_id":                    userID,
+		"telegram_payment_charge_id": telegramPaymentChargeID,
+	}
+	if amount > 0 {
+		data["amount"] = amount
+	}
+	if reason != "" {
+		data["reason"] = reason
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("ошибка маршалинга запроса: %w", err)
+	}
+	resp, err := c.HTTPClient.Post(
+		c.BaseURL+"/refundStarPayment",
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return fmt.Errorf("ошибка отправки запроса: %w", err)
+	}
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+	log.Printf("[TelegramAPI] Ответ на refundStarPayment: %s", string(bodyBytes))
+	var result map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		return fmt.Errorf("ошибка декодирования ответа: %w", err)
+	}
+	if ok, exists := result["ok"].(bool); !exists || !ok {
+		return fmt.Errorf("ошибка Telegram API: %v", result["description"])
+	}
+	return nil
 }

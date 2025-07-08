@@ -22,6 +22,7 @@ type MessageProcessor struct {
 	userService            *UserService
 	vpnConnectionService   *services.VPNConnectionService
 	config                 *config.Config
+	transactionService     *services.TransactionService
 }
 
 // NewMessageProcessor создает новый обработчик сообщений
@@ -35,6 +36,7 @@ func NewMessageProcessor(
 	userService *UserService,
 	vpnConnectionService *services.VPNConnectionService,
 	config *config.Config,
+	transactionService *services.TransactionService,
 ) *MessageProcessor {
 	return &MessageProcessor{
 		userStateService:       userStateService,
@@ -46,11 +48,79 @@ func NewMessageProcessor(
 		userService:            userService,
 		vpnConnectionService:   vpnConnectionService,
 		config:                 config,
+		transactionService:     transactionService,
 	}
 }
 
 // ProcessMessage обрабатывает входящее сообщение
 func (p *MessageProcessor) ProcessMessage(client *TelegramClient, update Update) error {
+	log.Printf("[RAW UPDATE] %+v", update)
+
+	// СНАЧАЛА обработка оплаты!
+	if update.PreCheckoutQuery != nil {
+		log.Printf("[DEBUG] pre_checkout_query: id=%s, user_id=%d, currency=%s, total_amount=%d, payload=%s", update.PreCheckoutQuery.ID, update.PreCheckoutQuery.From.ID, update.PreCheckoutQuery.Currency, update.PreCheckoutQuery.TotalAmount, update.PreCheckoutQuery.InvoicePayload)
+		// Подтверждаем pre_checkout_query и уведомляем пользователя
+		err := client.AnswerPreCheckoutQuery(update.PreCheckoutQuery.ID, true, "")
+		if err != nil {
+			log.Printf("[MessageProcessor] Ошибка подтверждения pre_checkout_query: %v", err)
+		} else {
+			log.Printf("[MessageProcessor] pre_checkout_query подтверждён для user_id=%d", update.PreCheckoutQuery.From.ID)
+		}
+		chatID := int(update.PreCheckoutQuery.From.ID)
+		_ = p.sendMessageHTML(client, chatID, "💸 Запрос на оплату получен, ожидайте подтверждения!")
+		return nil
+	}
+
+	if update.Message != nil && update.Message.SuccessfulPayment != nil {
+		log.Printf("[DEBUG] Получен SuccessfulPayment: %+v", update)
+		if update.Message.From.ID == 0 {
+			log.Printf("[ERROR] update.Message.SuccessfulPayment, но From.ID == 0: %+v", update)
+			return p.sendErrorMessage(client, 0, "Ошибка: не удалось определить пользователя для оплаты")
+		}
+		userID := int64(update.Message.From.ID)
+		chatID := update.Message.Chat.ID
+		log.Printf("[DEBUG] SuccessfulPayment userID=%d, chatID=%d", userID, chatID)
+
+		// Сообщаем пользователю, что платёж принят и идёт создание VPN
+		errMsg := p.sendMessageHTML(client, chatID, "⭐️ Платёж успешно принят! Создаём VPN...")
+		if errMsg != nil {
+			log.Printf("[MessageProcessor] Ошибка отправки сообщения о принятии платежа: %v", errMsg)
+		}
+
+		// Пробуем создать VPN
+		errVPN := p.createVPNAndSendInfo(client, chatID, userID)
+		sp := update.Message.SuccessfulPayment
+		if errVPN != nil {
+			// Если не удалось — делаем возврат
+			log.Printf("[ERROR] Ошибка создания VPN: %v", errVPN)
+			refundErr := client.RefundStarPayment(userID, sp.TelegramPaymentChargeID, sp.TotalAmount, "Не удалось создать VPN, возврат средств")
+			if refundErr != nil {
+				log.Printf("[ERROR] Ошибка возврата средств: %v", refundErr)
+				p.sendMessageHTML(client, chatID, "❌ Не удалось создать VPN и вернуть средства. Обратитесь к администратору.")
+			} else {
+				p.sendMessageHTML(client, chatID, "❌ Не удалось создать VPN. Ваши средства возвращены.")
+			}
+			return nil
+		}
+
+		// Если VPN создан — записываем транзакцию
+		trx := &services.Transaction{
+			TelegramPaymentChargeID: sp.TelegramPaymentChargeID,
+			TelegramUserID:          userID,
+			Amount:                  sp.TotalAmount,
+			InvoicePayload:          sp.InvoicePayload,
+			Status:                  "success",
+			Type:                    "payment",
+			Reason:                  "Оплата через Telegram Stars",
+		}
+		errTrx := p.transactionService.AddTransaction(trx)
+		if errTrx != nil {
+			log.Printf("[ERROR] Ошибка записи транзакции: %v", errTrx)
+		}
+
+		return nil
+	}
+
 	// Обрабатываем только текстовые сообщения и callback queries
 	if update.Message == nil && update.CallbackQuery == nil {
 		return nil
@@ -123,12 +193,12 @@ func (p *MessageProcessor) ProcessMessage(client *TelegramClient, update Update)
 			}
 
 			return p.handleVPNCallback(client, chatID, userID, messageText)
+		} else if strings.HasPrefix(messageText, "refund_") {
+			if _, err := client.AnswerCallbackQuery(update.CallbackQuery.ID, ""); err != nil {
+				log.Printf("[MessageProcessor] Ошибка ответа на callback refund: %v", err)
+			}
+			return p.handleRefundCallback(client, chatID, userID, messageText)
 		}
-	}
-
-	// Проверяем, что у нас есть текст сообщения
-	if messageText == "" {
-		return nil
 	}
 
 	log.Printf("[MessageProcessor] Обработка сообщения от пользователя %d (%s): %s", userID, username, messageText)
@@ -173,6 +243,8 @@ func (p *MessageProcessor) ProcessMessage(client *TelegramClient, update Update)
 	default:
 		return p.handleDefaultMessage(client, chatID, userID, username, messageText, userState)
 	}
+
+	return nil
 }
 
 // handleCommand обрабатывает команды
@@ -203,6 +275,8 @@ func (p *MessageProcessor) handleCommand(client *TelegramClient, chatID int, use
 		return p.handleCheckHostsCommand(client, chatID, userID, username, userState)
 	case "/vpn":
 		return p.handleVPNCommand(client, chatID, userID, username, userState)
+	case "/transactions":
+		return p.handleTransactionsCommand(client, chatID, userID)
 	default:
 		return p.sendMessage(client, chatID, fmt.Sprintf("Неизвестная команда: %s\nИспользуйте /help для получения справки", command))
 	}
@@ -218,7 +292,7 @@ func (p *MessageProcessor) handleStartCommand(client *TelegramClient, chatID int
 ✅ <b>Регистрация:</b> Автоматически завершена
 🎯 <b>Доступ:</b> Полный доступ к функциям
 
-Используйте /help для получения справки по командам.`, username, userState.State)
+Используйте /help для получения справки.`, username, userState.State)
 	if p.adminService.IsGlobalAdmin(userID) {
 		message += `\n\n🔧 <b>Администратор:</b> Доступны расширенные функции`
 		return p.sendMessageWithAdminButtons(client, chatID, message)
@@ -436,31 +510,38 @@ func (p *MessageProcessor) sendMessageWithCreateVPNButton(client *TelegramClient
 
 // handleCreateVPN обрабатывает callback create_vpn
 func (p *MessageProcessor) handleCreateVPN(client *TelegramClient, chatID int, userID int64) error {
-	// Получаем информацию о пользователе
+	title := "Создание VPN-подключения"
+	description := "Оплата за создание VPN через Telegram Stars"
+	payload := fmt.Sprintf("vpn_create_%d", userID)
+	providerToken := "" // Для Stars provider_token пустой
+	currency := "XTR"   // Валюта Stars
+	prices := []LabeledPrice{{Label: "VPN", Amount: 1}}
+	isTest := false
+	if p.adminService.IsGlobalAdmin(userID) {
+		isTest = false // Для админа — тестовый инвойс, чтобы не списывались звёзды
+	}
+	if err := client.SendInvoice(chatID, title, description, payload, providerToken, currency, prices, isTest); err != nil {
+		return p.sendErrorMessage(client, chatID, "Ошибка отправки инвойса на оплату через Stars")
+	}
+	return nil // Ждём подтверждения оплаты
+}
+
+// createVPNAndSendInfo — создание VPN и отправка пользователю
+func (p *MessageProcessor) createVPNAndSendInfo(client *TelegramClient, chatID int, userID int64) error {
 	user, err := p.userService.GetUserByTelegramID(userID)
 	if err != nil {
 		log.Printf("[MessageProcessor] Ошибка получения пользователя %d: %v", userID, err)
 		return p.sendErrorMessage(client, chatID, "Ошибка получения данных пользователя")
 	}
-
-	// Получаем активные серверы
 	servers, err := p.xuiServerService.GetActiveServers()
 	if err != nil || len(servers) == 0 {
 		return p.sendMessageHTML(client, chatID, "❌ Нет доступных XUI хостов для создания VPN. Обратитесь к администратору.")
 	}
-
-	// Случайный выбор сервера
 	rnd := time.Now().UnixNano()
 	idx := int(rnd) % len(servers)
 	server := servers[idx]
-
-	// Создаём клиента XUI
 	xui := xui_client.NewClient(server.ServerURL, server.Username, server.Password)
-
-	// Создаём VPN сервис с подключением к базе данных
 	vpnService := services.NewVPNService(xui, p.vpnConnectionService)
-
-	// Создаём VPN подключение
 	vpnConnection, err := vpnService.CreateVPNForUser(
 		userID,
 		user.Username,
@@ -473,26 +554,20 @@ func (p *MessageProcessor) handleCreateVPN(client *TelegramClient, chatID int, u
 		log.Printf("[MessageProcessor] Ошибка создания VPN для пользователя %d: %v", userID, err)
 		return p.sendErrorMessage(client, chatID, fmt.Sprintf("Ошибка создания VPN: %v", err))
 	}
-
-	// Формируем сообщение об успешном создании
 	message := fmt.Sprintf("✅ <b>VPN успешно создан и сохранен!</b>\n\n")
 	message += fmt.Sprintf("🔒 <b>VPN подключение #%d</b>\n", vpnConnection.ID)
 	message += fmt.Sprintf("🌐 <b>Сервер:</b> %s\n", server.ServerName)
 	message += fmt.Sprintf("🔌 <b>Порт:</b> %d\n", vpnConnection.Port)
 	message += fmt.Sprintf("📧 <b>Email:</b> %s\n", vpnConnection.Email)
 	message += fmt.Sprintf("📅 <b>Создано:</b> %s\n\n", vpnConnection.CreatedAt.Format("02.01.2006 15:04:05"))
-
 	message += "🔗 <b>VLESS ссылка для подключения:</b>\n"
 	message += fmt.Sprintf("<code>%s</code>\n\n", vpnConnection.VlessLink)
-
 	message += "📱 <b>Для подключения:</b>\n"
 	message += "1. Скопируйте VLESS ссылку выше\n"
 	message += "2. Откройте приложение V2rayNG или аналогичное\n"
 	message += "3. Нажмите «+» и выберите «Импорт из буфера обмена»\n"
 	message += "4. Вставьте ссылку и нажмите «Сохранить»\n\n"
-
 	message += "💡 <b>Управление VPN:</b> Используйте команду /vpn для просмотра всех ваших подключений"
-
 	return p.sendMessageHTML(client, chatID, message)
 }
 
@@ -887,4 +962,102 @@ func (p *MessageProcessor) sendMessageWithVPNButtons(client *TelegramClient, cha
 		log.Printf("[MessageProcessor] Ошибка отправки сообщения с VPN кнопками: %v", err)
 	}
 	return err
+}
+
+// handleTransactionsCommand выводит список транзакций для админа
+func (p *MessageProcessor) handleTransactionsCommand(client *TelegramClient, chatID int, userID int64) error {
+	if !p.adminService.IsGlobalAdmin(userID) {
+		return p.sendMessage(client, chatID, "❌ Только глобальные администраторы могут просматривать транзакции.")
+	}
+
+	transactions, err := p.transactionService.GetAllTransactions()
+	if err != nil {
+		log.Printf("[MessageProcessor] Ошибка получения транзакций: %v", err)
+		return p.sendErrorMessage(client, chatID, "Ошибка получения транзакций")
+	}
+	if len(transactions) == 0 {
+		return p.sendMessageHTML(client, chatID, "ℹ️ <b>Транзакций не найдено</b>")
+	}
+
+	var sb strings.Builder
+	sb.WriteString("<b>Последние транзакции:</b>\n\n")
+	var keyboard [][]InlineKeyboardButton
+	for _, tx := range transactions {
+		row := []InlineKeyboardButton{}
+		ts := tx.CreatedAt.Format("02.01.06 15:04")
+		sb.WriteString(fmt.Sprintf("ID: <code>%d</code> | User: <code>%d</code> | %s\nСумма: <b>%d</b> | Тип: <b>%s</b> | Статус: <b>%s</b>\nПричина: %s\n---\n",
+			tx.ID, tx.TelegramUserID, ts, tx.Amount, tx.Type, tx.Status, tx.Reason))
+		if tx.Type == "payment" && tx.Status == "success" {
+			row = append(row, InlineKeyboardButton{
+				Text:         "↩️ Возврат средств",
+				CallbackData: fmt.Sprintf("refund_%d", tx.ID),
+			})
+		}
+		if len(row) > 0 {
+			keyboard = append(keyboard, row)
+		}
+	}
+	inlineKeyboard := &InlineKeyboardMarkup{InlineKeyboard: keyboard}
+	_, err = client.SendMessageWithKeyboard(chatID, sb.String(), inlineKeyboard)
+	return err
+}
+
+// handleRefundCallback обрабатывает возврат средств по транзакции
+func (p *MessageProcessor) handleRefundCallback(client *TelegramClient, chatID int, userID int64, callbackData string) error {
+	if !p.adminService.IsGlobalAdmin(userID) {
+		return p.sendErrorMessage(client, chatID, "Нет прав для возврата средств")
+	}
+	parts := strings.Split(callbackData, "_")
+	if len(parts) != 2 {
+		return p.sendErrorMessage(client, chatID, "Неверный формат callback для возврата")
+	}
+	var txID int
+	if _, err := fmt.Sscanf(parts[1], "%d", &txID); err != nil {
+		return p.sendErrorMessage(client, chatID, "Неверный ID транзакции")
+	}
+	// Получаем транзакцию
+	transactions, err := p.transactionService.GetAllTransactions()
+	if err != nil {
+		return p.sendErrorMessage(client, chatID, "Ошибка поиска транзакции")
+	}
+	var tx *services.Transaction
+	for _, t := range transactions {
+		if t.ID == txID {
+			tx = t
+			break
+		}
+	}
+	if tx == nil {
+		return p.sendErrorMessage(client, chatID, "Транзакция не найдена")
+	}
+	if tx.Type != "payment" || tx.Status != "success" {
+		return p.sendErrorMessage(client, chatID, "Возврат возможен только для успешных платежей")
+	}
+	if tx.TelegramPaymentChargeID == "" {
+		return p.sendErrorMessage(client, chatID, "В транзакции отсутствует идентификатор платежа (telegram_payment_charge_id). Возврат невозможен.")
+	}
+	// Проверяем, что это не тестовый платёж
+	if tx.InvoicePayload != "" && (tx.InvoicePayload == "test" || tx.InvoicePayload == "vpn_create_test") {
+		return p.sendErrorMessage(client, chatID, "Возврат невозможен для тестовых платежей Telegram Stars.")
+	}
+	// Логируем детали транзакции для диагностики
+	log.Printf("[DEBUG] Refund: txID=%d, userID=%d, chargeID=%s, amount=%d, status=%s, type=%s, payload=%s",
+		tx.ID, tx.TelegramUserID, tx.TelegramPaymentChargeID, tx.Amount, tx.Status, tx.Type, tx.InvoicePayload)
+	// Делаем возврат
+	errRefund := client.RefundStarPayment(tx.TelegramUserID, tx.TelegramPaymentChargeID, tx.Amount, "Возврат по запросу админа")
+	if errRefund != nil {
+		return p.sendErrorMessage(client, chatID, fmt.Sprintf("Ошибка возврата: %v", errRefund))
+	}
+	// Записываем транзакцию возврата
+	refundTx := &services.Transaction{
+		TelegramPaymentChargeID: tx.TelegramPaymentChargeID,
+		TelegramUserID:          tx.TelegramUserID,
+		Amount:                  tx.Amount,
+		InvoicePayload:          tx.InvoicePayload,
+		Status:                  "success",
+		Type:                    "refund",
+		Reason:                  "Возврат по запросу админа",
+	}
+	_ = p.transactionService.AddTransaction(refundTx)
+	return p.sendMessageHTML(client, chatID, "✅ Возврат средств инициирован через Telegram Stars")
 }
