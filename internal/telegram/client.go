@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -609,5 +610,78 @@ func (c *TelegramClient) RefundStarPayment(userID int64, telegramPaymentChargeID
 	if ok, exists := result["ok"].(bool); !exists || !ok {
 		return fmt.Errorf("ошибка Telegram API: %v", result["description"])
 	}
+	return nil
+}
+
+// SetMyCommands устанавливает список команд бота
+func (c *TelegramClient) SetMyCommands(commands []map[string]string) error {
+	data := map[string]interface{}{"commands": commands}
+	jsonData, _ := json.Marshal(data)
+	resp, err := c.HTTPClient.Post(c.BaseURL+"/setMyCommands", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// SetMyDescription устанавливает описание бота
+func (c *TelegramClient) SetMyDescription(description string) error {
+	data := map[string]string{"description": description}
+	jsonData, _ := json.Marshal(data)
+	resp, err := c.HTTPClient.Post(c.BaseURL+"/setMyDescription", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// SetMyShortDescription устанавливает короткое описание бота
+func (c *TelegramClient) SetMyShortDescription(shortDescription string) error {
+	data := map[string]string{"short_description": shortDescription}
+	jsonData, _ := json.Marshal(data)
+	resp, err := c.HTTPClient.Post(c.BaseURL+"/setMyShortDescription", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// SetMyAboutText устанавливает текст about (в окне профиля)
+func (c *TelegramClient) SetMyAboutText(about string) error {
+	data := map[string]string{"about": about}
+	jsonData, _ := json.Marshal(data)
+	resp, err := c.HTTPClient.Post(c.BaseURL+"/setMyAboutText", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// SetMyProfilePhoto устанавливает фото профиля бота (путь к файлу)
+func (c *TelegramClient) SetMyProfilePhoto(photoPath string) error {
+	file, err := os.Open(photoPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	body := &bytes.Buffer{}
+	writer := io.MultiWriter(body)
+	io.Copy(writer, file)
+
+	req, err := http.NewRequest("POST", c.BaseURL+"/setMyProfilePhoto", body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
 	return nil
 }

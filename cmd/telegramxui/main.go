@@ -95,6 +95,19 @@ func main() {
 			log.Fatalf("Ошибка создания Telegram бота: %v", err)
 		}
 
+		// === Установка профиля, описания, about, команд ===
+		client := telegram.NewClient(cfg.Telegram.Token)
+		_ = client.SetMyDescription("TelegramXUI — управление VPN и XUI хостами через Telegram. Быстро, удобно, безопасно.")
+		_ = client.SetMyShortDescription("VPN и XUI для Telegram. Автоматизация, мониторинг, оплата Stars.")
+		_ = client.SetMyAboutText("Бот для управления VPN и XUI хостами. Поддержка Telegram Stars, мониторинг, админ-функции.")
+		_ = client.SetMyProfilePhoto("./bot_avatar.jpg") // Путь к файлу-аватару (замените на свой)
+		_ = client.SetMyCommands([]map[string]string{
+			{"command": "start", "description": "Запустить бота и меню"},
+			{"command": "help", "description": "Справка по командам"},
+			{"command": "vpn", "description": "Управление VPN подключениями"},
+		})
+		// === Конец блока профиля ===
+
 		// Создаем адаптеры для совместимости типов
 		userStateAdapter := &UserStateServiceAdapter{userStateService}
 		xuiHostAddAdapter := &XUIHostAddServiceAdapter{xuiHostAddService}
