@@ -182,6 +182,11 @@ func (s *HostMonitorService) checkAllHosts() {
 	log.Printf("[HostMonitor] Проверка завершена. Неактивных: %d, Восстановленных: %d", len(inactiveHosts), len(reactivatedHosts))
 }
 
+// CheckAllHosts проверяет все хосты (экспортируемый)
+func (s *HostMonitorService) CheckAllHosts() {
+	s.checkAllHosts()
+}
+
 // checkHost проверяет конкретный хост
 func (s *HostMonitorService) checkHost(server *XUIServer) HostStatus {
 	status := HostStatus{

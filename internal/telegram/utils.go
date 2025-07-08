@@ -42,25 +42,17 @@ func makeCreateVPNButton() *InlineKeyboardMarkup {
 	}
 }
 
-// makeAdminButtons возвращает inline-клавиатуру для админских действий
+// makeAdminButtons возвращает inline-клавиатуру с админскими кнопками
 func makeAdminButtons() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{
-				{
-					Text:         "🔑 Создать VPN",
-					CallbackData: "create_vpn",
-				},
+				{Text: "➕ Добавить хост", CallbackData: "admin_addhost"},
+				{Text: "🖥 Мониторинг", CallbackData: "admin_monitor"},
 			},
 			{
-				{
-					Text:         "➕ Добавить XUI хост",
-					CallbackData: "addhost",
-				},
-				{
-					Text:         "🔍 Проверить хосты",
-					CallbackData: "check_hosts",
-				},
+				{Text: "🔍 Проверить хосты", CallbackData: "admin_check_hosts"},
+				{Text: "💸 Транзакции", CallbackData: "admin_transactions"},
 			},
 		},
 	}
